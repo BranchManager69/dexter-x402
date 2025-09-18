@@ -1,0 +1,26 @@
+{
+  "name": "x402-facilitator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dexter facilitator service for Coinbase x402 payments",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8",
+    "x402": "^0.6.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "@types/cors": "^2.8.17"
+  }
+}
