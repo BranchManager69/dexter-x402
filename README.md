@@ -1,6 +1,6 @@
 # Dexter x402 Facilitator (Solana Mainnet)
 
-This service wraps Coinbase's [x402](https://github.com/coinbase/x402) protocol so Dexter can verify and settle Solana-based micropayments for premium API traffic. It exposes the standard facilitator endpoints consumed by the `x402-express` middleware that will sit inside `dexter-api`.
+This service wraps the [x402](https://github.com/coinbase/x402) protocol so Dexter can verify and settle Solana-based micropayments for premium API traffic. It exposes the standard facilitator endpoints consumed by the `x402-express` middleware that will sit inside `dexter-api`.
 
 ## Endpoints
 - `GET /healthz` – service status & enabled Solana networks.
