@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { verify, settle } from "x402/facilitator";
 import {
@@ -54,7 +54,15 @@ if (env.ALLOWED_ORIGINS) {
   }
 }
 
-app.get("/healthz", (_req, res) => {
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    service: "Dexter x402 facilitator",
+    status: "ok",
+    networks: Array.from(allowedNetworks),
+  });
+});
+
+app.get(["/health", "/healthz"], (_req, res) => {
   res.status(200).json({ status: "ok", networks: Array.from(allowedNetworks) });
 });
 
@@ -118,7 +126,7 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
   }
 });
 
-app.use((error: Error, _req: Request, res: Response) => {
+app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error("Unhandled facilitator error", error);
   res.status(500).json({ error: "Internal server error" });
 });
