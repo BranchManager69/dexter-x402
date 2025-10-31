@@ -99,6 +99,12 @@ app.post("/verify", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const network = resolveNetwork(paymentRequirements.network);
     const signer = await getSigner(network);
     const result = await verify(signer, paymentPayload, paymentRequirements);
+    logger.info({
+      kind: "verify",
+      network: paymentRequirements.network,
+      description: paymentRequirements.description,
+      maxAmountRequired: paymentRequirements.maxAmountRequired,
+    }, "x402 verification succeeded");
     return res.json(result);
   } catch (error) {
     logger.error("verify failed", error);
@@ -119,6 +125,13 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     }
 
     const result = await settle(signer, paymentPayload, paymentRequirements);
+    logger.info({
+      kind: "settle",
+      network: paymentRequirements.network,
+      description: paymentRequirements.description,
+      maxAmountRequired: paymentRequirements.maxAmountRequired,
+      transaction: (result as any)?.transaction ?? null,
+    }, "x402 settlement succeeded");
     return res.json(result);
   } catch (error) {
     logger.error("settle failed", error);
