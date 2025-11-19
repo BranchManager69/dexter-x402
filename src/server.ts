@@ -9,6 +9,8 @@ import {
   createSigner,
   isSvmSignerWallet,
 } from "x402/types";
+import { PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { $, bold, cyan, dim, gray, green, magenta, red, underline, yellow } from "kleur/colors";
 import { env } from "./config.js";
 
@@ -455,6 +457,22 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const paymentRequirements = PaymentRequirementsSchema.parse(req.body.paymentRequirements);
     const paymentPayload = PaymentPayloadSchema.parse(req.body.paymentPayload);
 
+    try {
+      await assertDestinationAtaExists(paymentRequirements);
+    } catch (error) {
+      if (error instanceof DestinationAtaMissingError) {
+        logger.error("destination ATA missing", {
+          payTo: paymentRequirements.payTo,
+          asset: extractMintAddress(paymentRequirements),
+        });
+        return res.status(400).json({ error: error.message });
+      }
+      if ((error as Error)?.message === "ata_check_failed") {
+        return res.status(503).json({ error: "unable_to_verify_destination_account" });
+      }
+      throw error;
+    }
+
     const network = resolveNetwork(paymentRequirements.network);
     const signer = await getSigner(network);
 
@@ -482,6 +500,95 @@ function getErrorMessage(error: unknown): string {
     return error.message;
   }
   return typeof error === "string" ? error : "Unknown error";
+}
+
+class DestinationAtaMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DestinationAtaMissingError";
+  }
+}
+
+function resolveSolanaRpcUrl(network: string): string | null {
+  const normalized = network.toLowerCase();
+  if (!normalized.startsWith("solana")) {
+    return null;
+  }
+  if (normalized.includes("devnet")) {
+    return "https://api.devnet.solana.com";
+  }
+  if (normalized.includes("testnet")) {
+    return "https://api.testnet.solana.com";
+  }
+  return "https://api.mainnet-beta.solana.com";
+}
+
+function extractMintAddress(paymentRequirements: ParsedPaymentRequirements): string | null {
+  const assetField = paymentRequirements.asset;
+  if (typeof assetField === "string") {
+    return assetField;
+  }
+  if (assetField && typeof assetField === "object" && "address" in assetField) {
+    const address = (assetField as { address?: unknown }).address;
+    if (typeof address === "string") {
+      return address;
+    }
+  }
+  return null;
+}
+
+async function assertDestinationAtaExists(paymentRequirements: ParsedPaymentRequirements) {
+  const network = paymentRequirements.network;
+  const payTo = paymentRequirements.payTo;
+  const mint = extractMintAddress(paymentRequirements);
+  if (!network || !payTo || !mint) {
+    return;
+  }
+
+  const rpcUrl = resolveSolanaRpcUrl(network);
+  if (!rpcUrl) {
+    return;
+  }
+
+  let mintKey: PublicKey;
+  let ownerKey: PublicKey;
+  try {
+    mintKey = new PublicKey(mint);
+    ownerKey = new PublicKey(payTo);
+  } catch {
+    return;
+  }
+
+  const ata = getAssociatedTokenAddressSync(mintKey, ownerKey);
+  const body = {
+    jsonrpc: "2.0",
+    id: "ata-check",
+    method: "getAccountInfo",
+    params: [ata.toBase58(), { commitment: "confirmed" }],
+  };
+
+  let exists = false;
+  try {
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await response.json();
+    exists = Boolean(json?.result?.value);
+  } catch (error) {
+    logger.error("ATA existence check failed", {
+      network,
+      payTo,
+      mint,
+      error: getErrorMessage(error),
+    });
+    throw new Error("ata_check_failed");
+  }
+
+  if (!exists) {
+    throw new DestinationAtaMissingError("🖕 rent is due mfer");
+  }
 }
 
 const port = env.PORT;
