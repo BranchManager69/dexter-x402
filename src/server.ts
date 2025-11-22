@@ -9,10 +9,23 @@ import {
   createSigner,
   isSvmSignerWallet,
 } from "x402/types";
-import { PublicKey } from "@solana/web3.js";
+import {
+  PublicKey,
+} from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { $, bold, cyan, dim, gray, green, magenta, red, underline, yellow } from "kleur/colors";
 import { env } from "./config.js";
+
+// Force x402 to use Helius by setting the standard environment variable
+// This is the most reliable way to configure the underlying Solana RPC client
+// without relying on internal library exports.
+if (env.HELIUS_API_KEY) {
+  const heliusUrl = `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`;
+  process.env.SOLANA_RPC_URL = heliusUrl;
+  process.env.SOLANA_RPC_ENDPOINT = heliusUrl;
+} else {
+  throw new Error("HELIUS_API_KEY is required for mainnet operations");
+}
 
 type LogLevel = "info" | "error";
 type ParsedPaymentRequirements = ReturnType<typeof PaymentRequirementsSchema.parse>;
@@ -444,6 +457,14 @@ app.post("/verify", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const network = resolveNetwork(paymentRequirements.network);
     const signer = await getSigner(network);
     const result = await verify(signer, paymentPayload, paymentRequirements);
+    if (!result.isValid) {
+      logger.error("verify_failed", {
+        reason: result.invalidReason,
+        payer: result.payer ?? null,
+        resource: paymentRequirements.resource ?? null,
+        network: paymentRequirements.network,
+      });
+    }
     logVerificationEvent(paymentRequirements);
     return res.json(result);
   } catch (error) {
@@ -509,18 +530,30 @@ class DestinationAtaMissingError extends Error {
   }
 }
 
-function resolveSolanaRpcUrl(network: string): string | null {
+function buildRpcCandidates(network: string): string[] {
   const normalized = network.toLowerCase();
   if (!normalized.startsWith("solana")) {
-    return null;
+    return [];
   }
+
+  // STRICT: Only allow Helius for mainnet
+  if (normalized === "solana" || normalized === "mainnet-beta") {
+    if (env.HELIUS_API_KEY) {
+      return [`https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`];
+    }
+    throw new Error("HELIUS_API_KEY is required for mainnet operations");
+  }
+
+  // Allow devnet/testnet fallbacks if explicitly requested
+  const candidates = new Set<string>();
+
   if (normalized.includes("devnet")) {
-    return "https://api.devnet.solana.com";
+    candidates.add("https://api.devnet.solana.com");
+  } else if (normalized.includes("testnet")) {
+    candidates.add("https://api.testnet.solana.com");
   }
-  if (normalized.includes("testnet")) {
-    return "https://api.testnet.solana.com";
-  }
-  return "https://api.mainnet-beta.solana.com";
+
+  return Array.from(candidates).filter(Boolean);
 }
 
 function extractMintAddress(paymentRequirements: ParsedPaymentRequirements): string | null {
@@ -545,8 +578,8 @@ async function assertDestinationAtaExists(paymentRequirements: ParsedPaymentRequ
     return;
   }
 
-  const rpcUrl = resolveSolanaRpcUrl(network);
-  if (!rpcUrl) {
+  const rpcCandidates = buildRpcCandidates(network);
+  if (!rpcCandidates.length) {
     return;
   }
 
@@ -564,31 +597,38 @@ async function assertDestinationAtaExists(paymentRequirements: ParsedPaymentRequ
     jsonrpc: "2.0",
     id: "ata-check",
     method: "getAccountInfo",
-    params: [ata.toBase58(), { commitment: "confirmed" }],
+    params: [ata.toBase58(), { commitment: "confirmed", encoding: "jsonParsed" }],
   };
 
-  let exists = false;
-  try {
-    const response = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const json = await response.json();
-    exists = Boolean(json?.result?.value);
-  } catch (error) {
-    logger.error("ATA existence check failed", {
-      network,
-      payTo,
-      mint,
-      error: getErrorMessage(error),
-    });
-    throw new Error("ata_check_failed");
+  let lastError: unknown = null;
+  for (const rpcUrl of rpcCandidates) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await response.json();
+      if (json?.result?.value) {
+        return;
+      }
+      lastError = new DestinationAtaMissingError("🖕 rent is due mfer");
+    } catch (error) {
+      lastError = error;
+      logger.error("ATA existence check failed", {
+        network,
+        payTo,
+        mint,
+        rpcUrl,
+        error: getErrorMessage(error),
+      });
+    }
   }
 
-  if (!exists) {
-    throw new DestinationAtaMissingError("🖕 rent is due mfer");
+  if (lastError instanceof DestinationAtaMissingError) {
+    throw lastError;
   }
+  throw new Error("ata_check_failed");
 }
 
 const port = env.PORT;
