@@ -1,6 +1,8 @@
-# Dexter x402 Facilitator (Solana Mainnet)
+# Dexter x402 Facilitator v1 (Solana Mainnet)
 
-This service wraps the [x402](https://github.com/coinbase/x402) protocol so Dexter can verify and settle Solana-based micropayments for premium API traffic. It exposes the standard facilitator endpoints consumed by the `x402-express` middleware that will sit inside `dexter-api`.
+# OUTDATED -- SEE V2 GUIDE!
+
+This service wraps the [x402](https://github.com/coinbase/x402) protocol so Dexter can verify and settle paid traffic for Dexter’s premium API endpoints. It exposes the standard facilitator endpoints consumed by the `x402-express` middleware inside `dexter-api`.
 
 ## Endpoints
 - `GET /healthz` – service status & enabled Solana networks.
@@ -11,15 +13,25 @@ This service wraps the [x402](https://github.com/coinbase/x402) protocol so Dext
 ## Getting Started
 ```bash
 cp .env.example .env
-# populate SOLANA_PRIVATE_KEY with a base58-encoded mainnet secret key
+# required: HELIUS_API_KEY (mainnet RPC) and SOLANA_PRIVATE_KEY (base58 mainnet fee payer)
 npm install
 npm run dev
 ```
 
-The server defaults to `http://localhost:4070` and targets `solana`. If you ever need to run isolated tests, you can temporarily set `FACILITATOR_NETWORKS=solana-devnet`, but production deployments **must** stay on mainnet.
+The server defaults to `http://localhost:4070` and targets Solana mainnet. Production is mainnet-only; do not configure devnet/testnet for this service.
+
+Base (EVM) settlement is supported when you also provide `BASE_PRIVATE_KEY` (and optionally `BASE_RPC_URL`) and list `base` in `FACILITATOR_NETWORKS`.
+
+### Environment
+- `HELIUS_API_KEY` (required): Solana mainnet RPC access; service will refuse to start without it.
+- `SOLANA_PRIVATE_KEY` (required for Solana): base58 fee-payer secret.
+- `FACILITATOR_NETWORKS`: comma list of enabled mainnet networks (e.g., `solana`, `base`).
+- `BASE_PRIVATE_KEY` (required if `base` enabled); `BASE_RPC_URL` optional override.
+- `ALLOWED_ORIGINS` (optional): comma list for CORS.
+- `PORT`, `LOG_LEVEL` as in `.env.example`.
 
 ### Preparing the Solana key
-1. Generate or import the fee payer keypair you want to dedicate to x402 settlements.
+1. Generate or import the Solana fee payer keypair you want to dedicate to x402 settlements.
    ```bash
    solana-keygen new --outfile solana-fee-payer.json
    ```
@@ -31,5 +43,4 @@ The server defaults to `http://localhost:4070` and targets `solana`. If you ever
 
 ## Roadmap
 - Add `/discovery` endpoints once we expose a public catalog of paid resources.
-- Extend config only if we ever need multi-chain support; currently enforced Solana-only.
 - Add metrics and structured tracing before mainnet launch.

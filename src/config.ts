@@ -23,6 +23,13 @@ const schema = z
       .string()
       .trim()
       .min(1, "SOLANA_PRIVATE_KEY must be a base58-encoded secret key"),
+    BASE_PRIVATE_KEY: z.string().trim().optional(),
+    BASE_RPC_URL: z
+      .string()
+      .trim()
+      .optional()
+      .transform(v => (v === "" ? undefined : v))
+      .pipe(z.string().url().optional()),
     HELIUS_API_KEY: z.string().trim().optional(),
     ALLOWED_ORIGINS: z.string().trim().optional(),
   })

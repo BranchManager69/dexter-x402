@@ -6,8 +6,11 @@ import {
   PaymentRequirementsSchema,
   SupportedPaymentKind,
   SupportedSVMNetworks,
+  SupportedEVMNetworks,
   createSigner,
   isSvmSignerWallet,
+  isEvmSignerWallet,
+  type Signer,
 } from "x402/types";
 import {
   PublicKey,
@@ -129,27 +132,40 @@ const logger = {
 type SolanaNetwork = (typeof SupportedSVMNetworks)[number];
 type SvmSigner = Awaited<ReturnType<typeof createSigner>>;
 
-const allowedNetworks = new Set<SolanaNetwork>(
+// Expanded allowed networks logic to include EVM (Base)
+const allowedNetworks = new Set<string>(
   env.FACILITATOR_NETWORKS.map(network => {
-    if (!SupportedSVMNetworks.includes(network as SolanaNetwork)) {
-      throw new Error(`Unsupported network configured: ${network}`);
+    if (SupportedSVMNetworks.includes(network as any)) {
+      return network;
     }
-    return network as SolanaNetwork;
+    if (SupportedEVMNetworks.includes(network as any)) {
+      return network;
+    }
+    throw new Error(`Unsupported network configured: ${network}`);
   }),
 );
 
-const signerCache = new Map<SolanaNetwork, Promise<SvmSigner>>();
+const signerCache = new Map<string, Promise<Signer>>();
 
-function resolveNetwork(network: string): SolanaNetwork {
-  if (!allowedNetworks.has(network as SolanaNetwork)) {
+function resolveNetwork(network: string): string {
+  if (!allowedNetworks.has(network)) {
     throw new Error(`Network ${network} is not enabled for this facilitator`);
   }
-  return network as SolanaNetwork;
+  return network;
 }
 
-async function getSigner(network: SolanaNetwork): Promise<SvmSigner> {
+async function getSigner(network: string): Promise<Signer> {
   if (!signerCache.has(network)) {
-    signerCache.set(network, createSigner(network, env.SOLANA_PRIVATE_KEY));
+    if (SupportedSVMNetworks.includes(network as any)) {
+      signerCache.set(network, createSigner(network, env.SOLANA_PRIVATE_KEY));
+    } else if (SupportedEVMNetworks.includes(network as any)) {
+      if (!env.BASE_PRIVATE_KEY) {
+        throw new Error(`BASE_PRIVATE_KEY is required for network: ${network}`);
+      }
+      signerCache.set(network, createSigner(network, env.BASE_PRIVATE_KEY));
+    } else {
+      throw new Error(`Unsupported network type for signer creation: ${network}`);
+    }
   }
   return signerCache.get(network)!;
 }
@@ -429,11 +445,20 @@ app.get("/supported", async (_req, res) => {
     const kinds: SupportedPaymentKind[] = [];
     for (const network of allowedNetworks) {
       const signer = await getSigner(network);
-      const feePayer = isSvmSignerWallet(signer) ? signer.address : undefined;
+      let feePayer: string | undefined;
+      
+      if (isSvmSignerWallet(signer)) {
+        feePayer = signer.address;
+      } else if (isEvmSignerWallet(signer)) {
+        // Handle both Client (has .account) and LocalAccount (has .address)
+        const anySigner = signer as any;
+        feePayer = anySigner.account?.address || anySigner.address;
+      }
+
       kinds.push({
         x402Version: 1,
         scheme: "exact",
-        network,
+        network: network as any,
         extra: feePayer ? { feePayer } : undefined,
       });
     }
@@ -478,27 +503,30 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const paymentRequirements = PaymentRequirementsSchema.parse(req.body.paymentRequirements);
     const paymentPayload = PaymentPayloadSchema.parse(req.body.paymentPayload);
 
-    try {
-      await assertDestinationAtaExists(paymentRequirements);
-    } catch (error) {
-      if (error instanceof DestinationAtaMissingError) {
-        logger.error("destination ATA missing", {
-          payTo: paymentRequirements.payTo,
-          asset: extractMintAddress(paymentRequirements),
-        });
-        return res.status(400).json({ error: error.message });
+    // Only check destination ATA on Solana
+    if (SupportedSVMNetworks.includes(paymentRequirements.network as any)) {
+      try {
+        await assertDestinationAtaExists(paymentRequirements);
+      } catch (error) {
+        if (error instanceof DestinationAtaMissingError) {
+          logger.error("destination ATA missing", {
+            payTo: paymentRequirements.payTo,
+            asset: extractMintAddress(paymentRequirements),
+          });
+          return res.status(400).json({ error: error.message });
+        }
+        if ((error as Error)?.message === "ata_check_failed") {
+          return res.status(503).json({ error: "unable_to_verify_destination_account" });
+        }
+        throw error;
       }
-      if ((error as Error)?.message === "ata_check_failed") {
-        return res.status(503).json({ error: "unable_to_verify_destination_account" });
-      }
-      throw error;
     }
 
     const network = resolveNetwork(paymentRequirements.network);
     const signer = await getSigner(network);
 
-    if (!isSvmSignerWallet(signer)) {
-      throw new Error("Configured Solana signer does not expose a wallet address");
+    if (!isSvmSignerWallet(signer) && !isEvmSignerWallet(signer)) {
+      throw new Error("Configured signer does not expose a wallet address");
     }
 
     const result = await settle(signer, paymentPayload, paymentRequirements);
