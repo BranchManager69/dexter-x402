@@ -18,6 +18,7 @@ import {
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { $, bold, cyan, dim, gray, green, magenta, red, underline, yellow } from "kleur/colors";
 import { env } from "./config.js";
+import { emitFacilitatorEvent } from "./events.js";
 
 // Force x402 to use Helius by setting the standard environment variable
 // This is the most reliable way to configure the underlying Solana RPC client
@@ -37,6 +38,33 @@ const LOG_PREFIX = "[x402]";
 const MAX_DETAIL_LINES = 4;
 
 $.enabled = true;
+
+/**
+ * Normalize resource URLs to the canonical x402.dexter.cash domain.
+ * This ensures consistent tracking in x402_facilitator_daily regardless of
+ * whether requests came via localhost, api.dexter.cash, or x402.dexter.cash.
+ */
+function normalizeResourceUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== "string") return null;
+  
+  // Normalize localhost/127.0.0.1 to canonical URL
+  if (url.includes("localhost:3030") || url.includes("127.0.0.1:3030")) {
+    const canonicalHost = process.env.X402_RESOURCE_HOST || "https://x402.dexter.cash";
+    try {
+      const parsed = new URL(url);
+      return `${canonicalHost}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return url;
+    }
+  }
+  
+  // Normalize api.dexter.cash to x402.dexter.cash
+  if (url.includes("api.dexter.cash")) {
+    return url.replace("api.dexter.cash", "x402.dexter.cash");
+  }
+  
+  return url;
+}
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) {
@@ -482,6 +510,10 @@ app.post("/verify", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const network = resolveNetwork(paymentRequirements.network);
     const signer = await getSigner(network);
     const result = await verify(signer, paymentPayload, paymentRequirements);
+    
+    const { asset } = resolveAssetInfo(paymentRequirements);
+    const resourceUrl = normalizeResourceUrl((paymentPayload as any)?.resource?.url);
+    
     if (!result.isValid) {
       logger.error("verify_failed", {
         reason: result.invalidReason,
@@ -489,7 +521,30 @@ app.post("/verify", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
         resource: paymentRequirements.resource ?? null,
         network: paymentRequirements.network,
       });
+      emitFacilitatorEvent({
+        eventType: "verify",
+        status: "error",
+        network: paymentRequirements.network,
+        payTo: paymentRequirements.payTo,
+        payer: result.payer ?? null,
+        asset,
+        amountAtomic: paymentRequirements.maxAmountRequired,
+        errorReason: result.invalidReason ?? "verify_failed",
+        metadata: resourceUrl ? { resourceUrl } : null,
+      });
+    } else {
+      emitFacilitatorEvent({
+        eventType: "verify",
+        status: "ok",
+        network: paymentRequirements.network,
+        payTo: paymentRequirements.payTo,
+        payer: result.payer ?? null,
+        asset,
+        amountAtomic: paymentRequirements.maxAmountRequired,
+        metadata: resourceUrl ? { resourceUrl } : null,
+      });
     }
+    
     logVerificationEvent(paymentRequirements);
     return res.json(result);
   } catch (error) {
@@ -503,6 +558,9 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
     const paymentRequirements = PaymentRequirementsSchema.parse(req.body.paymentRequirements);
     const paymentPayload = PaymentPayloadSchema.parse(req.body.paymentPayload);
 
+    const { asset } = resolveAssetInfo(paymentRequirements);
+    const resourceUrl = normalizeResourceUrl((paymentPayload as any)?.resource?.url);
+
     // Only check destination ATA on Solana
     if (SupportedSVMNetworks.includes(paymentRequirements.network as any)) {
       try {
@@ -513,9 +571,31 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
             payTo: paymentRequirements.payTo,
             asset: extractMintAddress(paymentRequirements),
           });
+          emitFacilitatorEvent({
+            eventType: "settle",
+            status: "error",
+            network: paymentRequirements.network,
+            payTo: paymentRequirements.payTo,
+            asset,
+            amountAtomic: paymentRequirements.maxAmountRequired,
+            errorReason: "destination_ata_missing",
+            errorCode: "ata_missing",
+            metadata: resourceUrl ? { resourceUrl } : null,
+          });
           return res.status(400).json({ error: error.message });
         }
         if ((error as Error)?.message === "ata_check_failed") {
+          emitFacilitatorEvent({
+            eventType: "settle",
+            status: "error",
+            network: paymentRequirements.network,
+            payTo: paymentRequirements.payTo,
+            asset,
+            amountAtomic: paymentRequirements.maxAmountRequired,
+            errorReason: "ata_check_failed",
+            errorCode: "ata_check_failed",
+            metadata: resourceUrl ? { resourceUrl } : null,
+          });
           return res.status(503).json({ error: "unable_to_verify_destination_account" });
         }
         throw error;
@@ -531,6 +611,21 @@ app.post("/settle", async (req: Request<unknown, unknown, VerifyBody>, res: Resp
 
     const result = await settle(signer, paymentPayload, paymentRequirements);
     const transaction = (result as any)?.transaction ?? null;
+    const settleSuccess = Boolean(result?.success);
+    
+    emitFacilitatorEvent({
+      eventType: "settle",
+      status: settleSuccess ? "ok" : "error",
+      network: paymentRequirements.network,
+      payTo: paymentRequirements.payTo,
+      asset,
+      amountAtomic: paymentRequirements.maxAmountRequired,
+      transaction: settleSuccess ? transaction : null,
+      errorReason: settleSuccess ? null : ((result as any)?.errorReason ?? "settle_failed"),
+      errorCode: settleSuccess ? null : ((result as any)?.errorCode ?? null),
+      metadata: resourceUrl ? { resourceUrl } : null,
+    });
+    
     logSettlementEvent(paymentRequirements, transaction);
     return res.json(result);
   } catch (error) {

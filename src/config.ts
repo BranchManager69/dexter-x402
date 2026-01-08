@@ -32,6 +32,9 @@ const schema = z
       .pipe(z.string().url().optional()),
     HELIUS_API_KEY: z.string().trim().optional(),
     ALLOWED_ORIGINS: z.string().trim().optional(),
+    // Event emission for metrics tracking
+    FACILITATOR_EVENTS_URL: z.string().trim().url().optional(),
+    FACILITATOR_METRICS_TOKEN: z.string().trim().optional(),
   })
   .transform(value => ({
     ...value,
