@@ -1,16 +1,22 @@
-# Dexter x402 Facilitator v1 (Solana Mainnet)
+# Dexter x402 Facilitator v1
 
-# OUTDATED -- SEE V2 GUIDE!
+Archived TypeScript implementation of Dexter's v1 x402 facilitator for Solana and Base. Last source update: January 8, 2026.
+
+For current Dexter x402 integrations, start with the [Dexter x402 SDK](https://github.com/Dexter-DAO/dexter-x402-sdk).
+
+## Historical v1 documentation
+
+The instructions and roadmap below are preserved from this version.
 
 This service wraps the [x402](https://github.com/coinbase/x402) protocol so Dexter can verify and settle paid traffic for Dexter’s premium API endpoints. It exposes the standard facilitator endpoints consumed by the `x402-express` middleware inside `dexter-api`.
 
-## Endpoints
+### Endpoints
 - `GET /healthz` – service status & enabled Solana networks.
 - `GET /supported` – supported payment kinds (includes the configured fee payer address).
 - `POST /verify` – validates an incoming `PaymentPayload` against the advertised requirements.
 - `POST /settle` – signs and submits the transaction on-chain, returning the settlement receipt.
 
-## Getting Started
+### Getting Started
 ```bash
 cp .env.example .env
 # required: HELIUS_API_KEY (mainnet RPC) and SOLANA_PRIVATE_KEY (base58 mainnet fee payer)
@@ -22,7 +28,7 @@ The server defaults to `http://localhost:4070` and targets Solana mainnet. Produ
 
 Base (EVM) settlement is supported when you also provide `BASE_PRIVATE_KEY` (and optionally `BASE_RPC_URL`) and list `base` in `FACILITATOR_NETWORKS`.
 
-### Environment
+#### Environment
 - `HELIUS_API_KEY` (required): Solana mainnet RPC access; service will refuse to start without it.
 - `SOLANA_PRIVATE_KEY` (required for Solana): base58 fee-payer secret.
 - `FACILITATOR_NETWORKS`: comma list of enabled mainnet networks (e.g., `solana`, `base`).
@@ -30,7 +36,7 @@ Base (EVM) settlement is supported when you also provide `BASE_PRIVATE_KEY` (and
 - `ALLOWED_ORIGINS` (optional): comma list for CORS.
 - `PORT`, `LOG_LEVEL` as in `.env.example`.
 
-### Preparing the Solana key
+#### Preparing the Solana key
 1. Generate or import the Solana fee payer keypair you want to dedicate to x402 settlements.
    ```bash
    solana-keygen new --outfile solana-fee-payer.json
@@ -41,6 +47,6 @@ Base (EVM) settlement is supported when you also provide `BASE_PRIVATE_KEY` (and
    ```
 3. Copy the printed string into `SOLANA_PRIVATE_KEY` and fund the public address with enough SOL (transaction fees) plus the SPL asset you plan to charge (e.g. USDC mint `EPjFWdd5AufqSSqeM2q1gBcxEzZp3n9Zx6Fh1An7y4`).
 
-## Roadmap
+### Roadmap
 - Add `/discovery` endpoints once we expose a public catalog of paid resources.
 - Add metrics and structured tracing before mainnet launch.
